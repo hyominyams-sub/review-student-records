@@ -1,0 +1,4 @@
+interface:
+  display_name: "생기부 점검"
+  short_description: "종합일람표를 점검하고 표시본·총평본을 생성합니다"
+  default_prompt: "Use $review-student-records to 점검 종합일람표 PDF를 색상 표시하고 별도 총평본까지 만들어 주세요."
