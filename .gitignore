@@ -4,3 +4,8 @@ __pycache__/
 Thumbs.db
 tmp/
 output/
+work/
+records.json
+records.txt
+issues.json
+*.pdf

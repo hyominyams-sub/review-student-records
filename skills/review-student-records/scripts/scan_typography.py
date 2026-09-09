@@ -118,10 +118,15 @@ def scan_page(page, page_number: int, args) -> list[dict]:
         # inter-word spacing differs by line. Fall back only for punctuation-
         # only segments that have no ordinary gap at all.
         baseline = statistics.median(local) if local else page_baseline
+        # A fixed point threshold is font-size dependent: in 8pt Gulim a real
+        # double space is only ~4.4pt wide, so a 6.8pt floor silently drops
+        # every one of them. In "auto" mode the ratio test does the work and
+        # this is just a noise floor.
+        min_gap = args.auto_gap_floor if args.min_gap_auto else args.min_gap
         for index, gap in enumerate(gaps):
             ratio = gap / baseline if baseline else 0.0
             if (
-                gap >= args.min_gap
+                gap >= min_gap
                 and gap <= args.max_candidate_gap
                 and ratio >= args.min_ratio
             ):
@@ -234,7 +239,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="생기부 PDF의 이중 띄어쓰기·온점 후보를 추출합니다.")
     parser.add_argument("input", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--min-gap", type=float, default=6.8)
+    parser.add_argument(
+        "--min-gap",
+        default="auto",
+        help="이중 띄어쓰기로 볼 최소 간격(pt). 'auto'(기본)면 --min-ratio 로만 판정하고 "
+             "--auto-gap-floor 를 잡음 하한으로 쓴다. 글자 크기가 작은 문서에서 "
+             "고정값을 쓰면 실제 이중 공백을 통째로 놓친다.",
+    )
+    parser.add_argument("--auto-gap-floor", type=float, default=2.0,
+                        help="auto 모드에서 무시할 최소 간격(pt). 기본 2.0")
     parser.add_argument("--min-ratio", type=float, default=1.65)
     parser.add_argument("--max-candidate-gap", type=float, default=18.0)
     parser.add_argument("--baseline-max-gap", type=float, default=15.0)
@@ -249,6 +262,13 @@ def main() -> None:
     parser.add_argument("--top-margin", type=float, default=0.08)
     parser.add_argument("--bottom-margin", type=float, default=0.05)
     args = parser.parse_args()
+
+    args.min_gap_auto = str(args.min_gap).strip().lower() == "auto"
+    if not args.min_gap_auto:
+        try:
+            args.min_gap = float(args.min_gap)
+        except ValueError:
+            parser.error("--min-gap 은 숫자이거나 'auto' 여야 합니다.")
 
     try:
         args.parsed_column_ranges = parse_column_ranges(args.column_range)
@@ -270,6 +290,7 @@ def main() -> None:
         "input": str(args.input.resolve()),
         "page_count": page_count,
         "candidate_count": len(candidates),
+        "min_gap_mode": "auto" if args.min_gap_auto else args.min_gap,
         "warning": "모든 항목은 후보입니다. 원문 렌더링에서 확인한 뒤 확정하십시오.",
         "candidates": candidates,
     }

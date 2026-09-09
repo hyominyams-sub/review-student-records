@@ -9,8 +9,9 @@ description: 초등학교 학교생활기록부 종합일람표 PDF를 기재요
 
 ## 시작 전
 
-1. PDF 작업에는 `pdf:pdf` 스킬을 함께 사용하고 그 `SKILL.md`를 먼저 읽는다.
-2. Drive 업로드가 요청되었거나 현재 작업 범위에 이미 포함되었다면 `google-drive:google-drive` 스킬도 읽고 사용한다.
+0. 스크립트 의존성을 먼저 확인한다: `python -m pip install -r requirements.txt`
+1. PDF 작업에는 PDF 스킬(Codex `pdf:pdf`, Claude Code `anthropic-skills:pdf`)을 함께 사용하고 그 `SKILL.md`를 먼저 읽는다. 없으면 이 스킬의 스크립트만으로 진행한다.
+2. Drive 업로드가 요청되었거나 현재 작업 범위에 이미 포함되었다면 Google Drive 스킬(`google-drive:google-drive`)도 읽고 사용한다.
 3. `references/review-criteria.md`와 `references/validated-pdf-workflow.md`를 반드시 읽고 적용한다. 후자는 실제 5-1 종합일람표에서 결과가 검증된 PDF 분석 로직만 담고 있다.
 4. 다음 설정을 프롬프트와 문서에서 우선 추출한다.
    - 입력 종합일람표 PDF
@@ -34,12 +35,21 @@ description: 초등학교 학교생활기록부 종합일람표 PDF를 기재요
 - 연속 페이지에 걸친 학생 기록을 한 학생으로 연결한다.
 - 텍스트뿐 아니라 단어별 좌표를 보존해 주석 위치의 근거로 사용한다.
 - 추출 결과를 `records.json`과 사람이 읽을 수 있는 `records.txt`로 한 번 저장하고 이후 분석에서 재사용한다.
-- 열 좌표, 학생 시작 표식, 머리글 높이는 현재 PDF에서 다시 확인한다. 5-1에서 검증된 좌표를 다른 크기·양식에 그대로 적용하지 않는다.
+- 열 좌표, 학생 시작 표식, 머리글 높이는 현재 PDF에서 다시 확인한다. 다른 학급에서 검증된 좌표를 다른 크기·양식에 그대로 적용하지 않는다.
+
+`scripts/extract_records.py`가 위 작업을 한 번에 처리한다. 표 선에서 열을 직접 찾고, 번호 칸이 빈 행을 앞 학생의 이어짐으로 연결하며, 낱말 좌표를 그대로 보존한다.
+
+```powershell
+python scripts/extract_records.py "종합일람표.pdf" --outdir work
+```
+
+출력된 열 이름과 학생 수가 눈으로 본 것과 맞는지 반드시 확인한다. 어긋나면 `--header-line`, `--number-column`, `--name-column` 으로 조정한다. `records.json` 의 `bbox` 는 주석에 그대로 쓸 수 있는 좌표다.
 
 ### 2. 후보 전수 탐색
 
 - 맞춤법, 띄어쓰기, 조사·어미, 명사형 종결, 온점, 숫자·날짜, 기간, 용어 통일, 사실 확인, 기재 제한을 점검한다.
 - `scripts/scan_typography.py`를 실행해 이중 띄어쓰기와 온점 후보를 얻는다. 이 결과는 확정 오류가 아니므로 원문 렌더링에서 다시 확인한다.
+- 간격 기준은 `--min-gap auto`(기본)를 쓴다. 고정 pt 값은 글자 크기에 따라 달라져서, 8pt 본문에서 폭이 약 4.4pt인 실제 이중 공백을 통째로 놓친다.
 - 이중 띄어쓰기와 온점 탐지는 `references/validated-pdf-workflow.md`의 검증된 열 분리·줄 간격·학생 경계 조건을 유지한다.
 - 문서 기준일보다 뒤의 활동일, `03.01.`이 아닌 임원 시작일, 학교 자료와 다른 종료일, 출처가 불분명한 단정·예측을 별도로 검색한다.
 - 반복 문구 검사가 제외된 경우 학생 간 동일·유사 문장을 오류로 만들지 않는다.
@@ -50,7 +60,8 @@ description: 초등학교 학교생활기록부 종합일람표 PDF를 기재요
 
 ```powershell
 python scripts/scan_typography.py "종합일람표.pdf" `
-  --output "typography-candidates.json" `
+  --output "work/typography-candidates.json" `
+  --min-gap auto `
   --column-range 90:455 `
   --column-range 455:719 `
   --column-range 850:978
@@ -87,6 +98,14 @@ python scripts/scan_typography.py "종합일람표.pdf" `
 - 이름은 반복 문구 제외 시 `{원본명}_반복문구제외_점검표시본.pdf`로 한다.
 - 표시가 본문을 가리거나 다른 학생 행에 걸치지 않게 한다.
 
+```powershell
+python scripts/build_marked_pdf.py "종합일람표.pdf" `
+  --issues "work/issues.json" `
+  --output "종합일람표_반복문구제외_점검표시본.pdf"
+```
+
+여러 줄에 걸친 문구는 `bbox` 대신 `bboxes` 에 줄별 상자를 넣는다. 좌표를 못 붙인 항목이 있으면 스크립트가 경고와 함께 0이 아닌 코드로 끝나므로, 그 항목은 총평의 `별도 확인 사항`으로 옮긴다.
+
 ### 5. 총평본 생성
 
 - 별도의 A4 PDF로 만든다. 필요하면 동일 내용의 Markdown도 함께 보관한다.
@@ -94,6 +113,16 @@ python scripts/scan_typography.py "종합일람표.pdf" `
 - 핵심 수정 사항, 사실 확인 사항, 학생별 상세 목록, 표시하기 어려운 항목, 검사 제외 범위를 포함한다.
 - 개인정보를 불필요하게 복제하지 않는다.
 - 이름은 `{원본명}_반복문구제외_점검총평.pdf`로 한다. 반복 문구를 검사한 경우 파일명에서 `반복문구제외`를 뺀다.
+
+```powershell
+python scripts/build_report_pdf.py `
+  --issues "work/issues.json" `
+  --meta "work/meta.json" `
+  --output "종합일람표_반복문구제외_점검총평.pdf" `
+  --markdown "work/총평.md"
+```
+
+`meta.json` 은 1단계 산출물에 `basis_date`, `officer_start`, `officer_end`, `repeated_phrases`, `guideline`, `excluded`, `unmarked` 을 덧붙여 쓴다. `officer_end` 가 비어 있으면 총평에 `종료일 확인 필요`로 찍히므로, 근거가 없을 때는 비워 두는 편이 맞다.
 
 ### 6. 검증
 

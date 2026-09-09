@@ -8,7 +8,22 @@ from pypdf import PdfReader
 
 
 def annotation_count(reader: PdfReader) -> int:
-    return sum(len(page.get("/Annots", [])) for page in reader.pages)
+    """Count markup annotations only.
+
+    A highlight with a note carries a companion /Popup annotation, so counting
+    every entry in /Annots would report twice as many findings as there are.
+    """
+    total = 0
+    for page in reader.pages:
+        for ref in page.get("/Annots", []) or []:
+            try:
+                annotation = ref.get_object()
+            except Exception:
+                total += 1
+                continue
+            if annotation.get("/Subtype") != "/Popup":
+                total += 1
+    return total
 
 
 def load_issues(path: Path | None) -> list[dict] | None:

@@ -1,0 +1,7 @@
+# 생기부 점검 스킬 스크립트 의존성
+# 설치: python -m pip install -r requirements.txt
+
+pymupdf>=1.24      # extract_records.py, build_marked_pdf.py - 표 선 검출과 주석
+pdfplumber>=0.11   # scan_typography.py - 낱말 간격 측정
+pypdf>=4.0         # verify_review_outputs.py - 페이지·주석 재검증
+reportlab>=4.0     # build_report_pdf.py - 총평본 조판
