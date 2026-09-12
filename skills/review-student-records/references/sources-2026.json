@@ -1,0 +1,28 @@
+{
+  "version": "2026.1",
+  "academic_year": 2026,
+  "checked_at": "2026-09-12",
+  "publisher": "교육부",
+  "notice_url": "https://www.moe.go.kr/boardCnts/viewRenew.do?boardID=316&boardSeq=105372&lev=0&searchType=null&statusYN=W&page=1&s=moe&m=0302&opType=N",
+  "notice_date": "2026-02-19",
+  "sources": {
+    "elementary": {
+      "title": "2026 학교생활기록부 기재요령(초등학교)",
+      "url": "https://www.moe.go.kr/boardCnts/fileDown.do?m=0302&s=moe&fileSeq=20b6e362275e20aefc61857e4af63872",
+      "pages": 161,
+      "sha256": "72dd61629c0f841bbc75adbf9250130a71d44cf2fff2a8568bd6eb905ff2b496"
+    },
+    "middle": {
+      "title": "2026 학교생활기록부 기재요령(중학교)",
+      "url": "https://www.moe.go.kr/boardCnts/fileDown.do?m=0302&s=moe&fileSeq=4ad0d9bae480b48e1b9b3de0592f955b",
+      "pages": 173,
+      "sha256": "186cfd0355ae64e766640a4df3f7bd94179dc824203edab4c97ef499eaf47578"
+    },
+    "high": {
+      "title": "2026 학교생활기록부 기재요령(고등학교)",
+      "url": "https://www.moe.go.kr/boardCnts/fileDown.do?m=0302&s=moe&fileSeq=6668402ed462e43bd1ff70123359bf50",
+      "pages": 223,
+      "sha256": "c122b02eb6d230976c42474cc5dd96937c084dffd2ea29ce597bbb71d5a974cd"
+    }
+  }
+}

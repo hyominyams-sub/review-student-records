@@ -1,101 +1,66 @@
-from __future__ import annotations
-
+#!/usr/bin/env python3
+"""Verify preservation, issue-to-page mapping, note contents and report IDs."""
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
-
-from pypdf import PdfReader
-
-
-def annotation_count(reader: PdfReader) -> int:
-    """Count markup annotations only.
-
-    A highlight with a note carries a companion /Popup annotation, so counting
-    every entry in /Annots would report twice as many findings as there are.
-    """
-    total = 0
-    for page in reader.pages:
-        for ref in page.get("/Annots", []) or []:
-            try:
-                annotation = ref.get_object()
-            except Exception:
-                total += 1
-                continue
-            if annotation.get("/Subtype") != "/Popup":
-                total += 1
-    return total
+import pymupdf
+from review_common import COLORS, load_issues
+from build_marked_pdf import annotation_text
 
 
-def load_issues(path: Path | None) -> list[dict] | None:
-    if path is None:
-        return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict) and isinstance(payload.get("issues"), list):
-        return payload["issues"]
-    raise ValueError("issues JSON은 배열이거나 issues 배열을 포함한 객체여야 합니다.")
+def annotation_count(doc):
+    return sum(len(list(p.annots() or [])) for p in doc)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="생기부 점검 표시본·총평본을 검증합니다.")
-    parser.add_argument("--source", type=Path)
-    parser.add_argument("--marked", type=Path, required=True)
-    parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--issues-json", type=Path)
-    parser.add_argument("--require-text", action="append", default=[])
-    args = parser.parse_args()
-
-    for path in [args.source, args.marked, args.report, args.issues_json]:
-        if path is not None and not path.is_file():
-            parser.error(f"파일을 찾을 수 없습니다: {path}")
-
-    marked = PdfReader(str(args.marked))
-    report = PdfReader(str(args.report))
-    source = PdfReader(str(args.source)) if args.source else None
-    issues = load_issues(args.issues_json)
-
-    marked_annotations = annotation_count(marked)
-    source_annotations = annotation_count(source) if source else 0
-    added_annotations = marked_annotations - source_annotations
-    report_text = "\n".join(page.extract_text() or "" for page in report.pages)
-    errors: list[str] = []
-
-    if source and len(source.pages) != len(marked.pages):
-        errors.append("원본과 표시본의 페이지 수가 다릅니다.")
-    if not report.pages:
-        errors.append("총평본에 페이지가 없습니다.")
-    if added_annotations < 0:
-        errors.append("표시본의 주석 수가 원본보다 적습니다.")
-    if issues is not None:
-        ids = [issue.get("id") for issue in issues if issue.get("id") is not None]
-        if len(ids) != len(set(ids)):
-            errors.append("issues JSON의 문제 ID가 중복됩니다.")
-        if added_annotations != len(issues):
-            errors.append(
-                f"추가 주석 수({added_annotations})와 문제 수({len(issues)})가 다릅니다."
-            )
-    for required in args.require_text:
-        if required not in report_text:
-            errors.append(f"총평본에 필수 문구가 없습니다: {required}")
-
-    result = {
-        "status": "ok" if not errors else "failed",
-        "source_pages": len(source.pages) if source else None,
-        "marked_pages": len(marked.pages),
-        "report_pages": len(report.pages),
-        "source_annotations": source_annotations if source else None,
-        "marked_annotations": marked_annotations,
-        "added_annotations": added_annotations,
-        "issue_count": len(issues) if issues is not None else None,
-        "marked_bytes": args.marked.stat().st_size,
-        "report_bytes": args.report.stat().st_size,
-        "required_text": {text: text in report_text for text in args.require_text},
-        "errors": errors,
-    }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    raise SystemExit(1 if errors else 0)
+def verify(source,marked,report,issues,required):
+    errors=[]
+    with pymupdf.open(marked) as m, pymupdf.open(report) as r:
+        added=annotation_count(m)
+        if source:
+            with pymupdf.open(source) as s:
+                added-=annotation_count(s)
+                if len(s)!=len(m):errors.append('원본과 표시본 페이지 수 불일치')
+                for n,(sp,mp) in enumerate(zip(s,m),1):
+                    if sp.get_text()!=mp.get_text():errors.append(f'{n}쪽: 원본 텍스트 변경')
+                    if sp.rotation!=mp.rotation or sp.mediabox!=mp.mediabox or sp.cropbox!=mp.cropbox:
+                        errors.append(f'{n}쪽: 회전/페이지 크기 변경')
+                    # PDF content streams preserve text, image placement and table drawing.
+                    if sp.read_contents()!=mp.read_contents():errors.append(f'{n}쪽: 본문 스트림 변경')
+        rt='\n'.join(p.get_text() for p in r)
+        for t in required:
+            if t not in rt:errors.append('보고서 문구 누락: '+t)
+        if issues is not None:
+            expected=[i for i in issues if not i.get('unmarked')]
+            if added!=len(expected):errors.append(f'추가 주석 {added} / 예상 {len(expected)} 불일치')
+            for i in issues:
+                if i['page']>len(m):errors.append(i['id']+': 존재하지 않는 페이지');continue
+                if i['id'] not in rt:errors.append(i['id']+': 보고서 누락')
+                if f"원본 PDF {i['page']}쪽" not in rt:errors.append(i['id']+': 보고서 원본 페이지 누락')
+                if i.get('unmarked'):continue
+                page=m[i['page']-1]
+                matches=[a for a in page.annots() or [] if a.info.get('subject')==i['id']]
+                if len(matches)!=1:errors.append(i['id']+': 해당 페이지 주석 ID 불일치');continue
+                a=matches[0]
+                if a.type[1]!='Highlight':errors.append(i['id']+': 형광펜이 아님')
+                if a.info.get('content')!=annotation_text(i):errors.append(i['id']+': 주석 내용 불일치')
+                actual=a.colors.get('stroke') or ()
+                want=COLORS[i.get('color','yellow')]
+                if len(actual)!=3 or any(abs(x-y)>.01 for x,y in zip(actual,want)):errors.append(i['id']+': 색상 불일치')
+                bounds=page.rect*page.derotation_matrix
+                if not all(bounds.contains(pymupdf.Point(v)) for v in a.vertices or []):errors.append(i['id']+': 주석 좌표 이탈')
+        return {'status':'failed' if errors else 'ok','marked_pages':len(m),'report_pages':len(r),
+                'added_annotations':added,'issue_count':len(issues) if issues is not None else None,'errors':errors}
 
 
-if __name__ == "__main__":
-    main()
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--source',type=Path)
+    p.add_argument('--marked',type=Path,required=True);p.add_argument('--report',type=Path,required=True)
+    p.add_argument('--issues-json',type=Path);p.add_argument('--require-text',action='append',default=[])
+    a=p.parse_args()
+    try:
+        issues=load_issues(a.issues_json) if a.issues_json else None
+        result=verify(a.source,a.marked,a.report,issues,a.require_text)
+    except (ValueError,OSError) as e:p.exit(1,str(e)+'\n')
+    print(json.dumps(result,ensure_ascii=False,indent=2));raise SystemExit(1 if result['errors'] else 0)
+if __name__=='__main__':main()

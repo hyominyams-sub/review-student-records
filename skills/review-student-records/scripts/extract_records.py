@@ -194,7 +194,7 @@ def extract(pdf: Path, number_column: int, name_column: int, header_line: int) -
         inner = [y for y, _s, _e in horizontal if table_top + 0.5 < y < header_bottom - 0.5]
         label_top = max(inner) if inner else table_top
         columns = column_bounds(vertical, label_top, header_bottom)
-        if len(columns) < 3:
+        if len(columns) < 3 or max(number_column, name_column) >= len(columns)-1:
             warnings.append(f"{pno}쪽: 표 세로선을 찾지 못해 건너뜀")
             continue
 
@@ -205,6 +205,10 @@ def extract(pdf: Path, number_column: int, name_column: int, header_line: int) -
             warnings.append(
                 f"{pno}쪽: 열 개수가 {len(columns) - 1}개로 1쪽({len(first_columns) - 1}개)과 다름")
 
+        if current and warnings and warnings[-1].startswith(f"{pno}쪽: 열 개수"):
+            current = None
+            warnings.append(f"{pno}쪽: 표 구조 변경으로 학생 연결 중단; 페이지 모드로 확인 필요")
+        page_labels = header_labels(page, columns, label_top, header_bottom)
         words = visual_words(page)
         bounds = [header_bottom] + [y for y in rows if y > header_bottom + 0.5]
         for row_top, row_bottom in zip(bounds, bounds[1:]):
@@ -231,7 +235,7 @@ def extract(pdf: Path, number_column: int, name_column: int, header_line: int) -
                 current["pages"].append(pno)
 
             for ci in range(len(columns) - 1):
-                label = labels[ci] if ci < len(labels) else f"열{ci + 1}"
+                label = page_labels[ci] if ci < len(page_labels) else f"열{ci + 1}"
                 cell = words_in(row_words, columns[ci], columns[ci + 1], row_top, row_bottom)
                 if not cell:
                     continue
@@ -257,6 +261,19 @@ def extract(pdf: Path, number_column: int, name_column: int, header_line: int) -
     return {"meta": meta, "students": students}
 
 
+def extract_pages(pdf: Path) -> dict:
+    """Retain page words without pretending to know the student/table layout."""
+    with pymupdf.open(pdf) as doc:
+        pages=[]
+        warnings=[]
+        for n,page in enumerate(doc,1):
+            words=[{"page":n,"bbox":list(w[:4]),"text":w[4]} for w in page.get_text("words")]
+            pages.append({"page":n,"rotation":page.rotation,"text":page.get_text(),"words":words})
+            if not words:warnings.append(f"{n}쪽: 텍스트 없음. OCR 또는 원본 시각 확인 필요")
+        return {"meta":{"source":pdf.name,"pages":len(doc),"student_count":None,
+                        "layout":"pages","warnings":warnings},"students":[],"pages":pages}
+
+
 def write_text_dump(data: dict, path: Path) -> None:
     lines = [f"# {data['meta']['source']} 추출 결과",
              f"# 쪽수 {data['meta']['pages']} / 학생 {data['meta']['student_count']}명", ""]
@@ -280,6 +297,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="종합일람표 PDF에서 학생별·영역별 기록을 추출한다")
     parser.add_argument("input", type=Path)
+    parser.add_argument("--layout", choices=["table", "pages"], default="table")
     parser.add_argument("--outdir", type=Path, default=Path("work"))
     parser.add_argument("--number-column", type=int, default=0,
                         help="번호가 들어 있는 열 번호(0부터). 기본 0")
@@ -293,23 +311,27 @@ def main() -> int:
         print(f"[오류] 파일이 없습니다: {args.input}", file=sys.stderr)
         return 1
 
-    data = extract(args.input, args.number_column, args.name_column, args.header_line)
+    if min(args.number_column,args.name_column) < 0 or args.header_line < 1:
+        parser.error("열 번호는 0 이상, header-line은 1 이상이어야 합니다.")
+    data = extract_pages(args.input) if args.layout == "pages" else extract(args.input, args.number_column, args.name_column, args.header_line)
     args.outdir.mkdir(parents=True, exist_ok=True)
 
     (args.outdir / "records.json").write_text(
         json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     (args.outdir / "meta.json").write_text(
         json.dumps(data["meta"], ensure_ascii=False, indent=2), encoding="utf-8")
-    write_text_dump(data, args.outdir / "records.txt")
-
-    meta = data["meta"]
-    print(f"쪽수 {meta['pages']} / 회전 {meta['rotation']}도 / 열 {len(meta['columns']) - 1}개")
-    print(f"학생 {meta['student_count']}명")
-    print("열 이름: " + " | ".join(meta["field_names"]))
-    for warning in meta["warnings"]:
-        print(f"[주의] {warning}")
-    print(f"저장: {args.outdir / 'records.json'}, records.txt, meta.json")
-    print("→ 열 이름과 학생 수가 눈으로 본 것과 맞는지 반드시 확인하세요.")
+    if args.layout == "pages":
+        (args.outdir / "records.txt").write_text("\n".join(
+            f"## 원본 PDF {p['page']}쪽\n{p['text']}" for p in data['pages']), encoding="utf-8")
+    else:
+        write_text_dump(data, args.outdir / "records.txt")
+    meta = data['meta']
+    print(f"쪽수 {meta['pages']} / 학생 {meta['student_count']} / 모드 {args.layout}")
+    for warning in meta['warnings']: print('[확인 필요] '+warning)
+    print(f"저장: {args.outdir}")
+    if args.layout == 'table' and (not meta['student_count'] or meta['warnings']):
+        print('추출 범위를 확인하세요. 필요하면 --layout pages로 다시 추출하세요.')
+        return 2
     return 0
 
 
